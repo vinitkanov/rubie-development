@@ -6,65 +6,16 @@ use pnet::packet::arp::{ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPa
 use pnet::packet::ethernet::{EtherTypes, EthernetPacket, MutableEthernetPacket};
 use pnet::packet::Packet;
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-pub struct NetworkScanner {
-    pub devices: Arc<Mutex<Vec<NetworkDevice>>>,
-    pub network_info: Arc<Mutex<NetworkInfo>>,
-    pub scanning: Arc<Mutex<bool>>,
-}
+#[derive(Clone, Default)]
+pub struct NetworkScanner;
 
 impl NetworkScanner {
-    pub fn new() -> Self {
-        Self {
-            devices: Arc::new(Mutex::new(Vec::new())),
-            network_info: Arc::new(Mutex::new(NetworkInfo::default())),
-            scanning: Arc::new(Mutex::new(false)),
-        }
-    }
 
-    pub fn scan_network(&self) {
-        let devices = Arc::clone(&self.devices);
-        let network_info = Arc::clone(&self.network_info);
-        let scanning = Arc::clone(&self.scanning);
 
-        tokio::spawn(async move {
-            {
-                let mut scan_flag = scanning.lock().unwrap();
-                *scan_flag = true;
-            }
-
-            // Clear previous results
-            {
-                let mut devices_lock = devices.lock().unwrap();
-                devices_lock.clear();
-            }
-
-            match Self::run_arp_scan().await {
-                Ok(scanned_devices) => {
-                    let mut devices_lock = devices.lock().unwrap();
-                    *devices_lock = scanned_devices;
-
-                    let mut info = network_info.lock().unwrap();
-                    info.active_devices = devices_lock.len();
-                }
-                Err(e) => {
-                    eprintln!("Scan error: {}", e);
-                    let mut devices_lock = devices.lock().unwrap();
-                    devices_lock.clear();
-                }
-            }
-
-            {
-                let mut scan_flag = scanning.lock().unwrap();
-                *scan_flag = false;
-            }
-        });
-    }
-
-    async fn run_arp_scan() -> Result<Vec<NetworkDevice>> {
+    pub async fn run_arp_scan() -> Result<Vec<NetworkDevice>> {
         let interface = Self::get_default_interface()?;
         let source_ip = interface
             .ips
@@ -228,15 +179,6 @@ impl NetworkScanner {
         Ok(network_info)
     }
 
-    pub fn restore_selected_devices(&self) {
-        let devices = Arc::clone(&self.devices);
-        crate::restore::restore_selected_devices(&devices);
-    }
-
-    pub fn restore_all_devices(&self) {
-        let devices = Arc::clone(&self.devices);
-        crate::restore::restore_all_devices(&devices);
-    }
 }
 
 #[cfg(test)]
