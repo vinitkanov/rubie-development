@@ -1,10 +1,12 @@
 use crate::models::DeviceStatus;
 use crate::network::NetworkScanner;
 use eframe::egui;
+use std::time::{Duration, Instant};
 
 pub struct NetworkManagerApp {
     scanner: NetworkScanner,
     auto_refresh: bool,
+    last_scan: Instant,
 }
 
 impl NetworkManagerApp {
@@ -12,7 +14,7 @@ impl NetworkManagerApp {
         let scanner = NetworkScanner::new();
 
         // Get initial network info
-        if let Ok(info) = NetworkScanner::get_local_network_info() {
+        if let Ok(info) = scanner.get_local_network_info() {
             let mut network_info = scanner.network_info.lock().unwrap();
             *network_info = info;
         }
@@ -20,6 +22,7 @@ impl NetworkManagerApp {
         Self {
             scanner,
             auto_refresh: false,
+            last_scan: Instant::now(),
         }
     }
 
@@ -40,7 +43,11 @@ impl NetworkManagerApp {
                 ui.add_space(10.0);
 
                 // Auto-refresh toggle
-                ui.checkbox(&mut self.auto_refresh, "🗘 Auto-refresh");
+                if ui.checkbox(&mut self.auto_refresh, "🗘 Auto-refresh").clicked() {
+                    if self.auto_refresh {
+                        self.last_scan = Instant::now();
+                    }
+                }
             });
         });
 
@@ -63,9 +70,11 @@ impl NetworkManagerApp {
                     ui.set_width(340.0);
                     ui.vertical(|ui| {
                         ui.label(egui::RichText::new("🌐 Network Range").strong());
-                        ui.label(egui::RichText::new(&network_info.network_range)
-                            .size(16.0)
-                            .color(egui::Color32::from_rgb(50, 50, 50)));
+                        ui.label(
+                            egui::RichText::new(&network_info.network_range)
+                                .size(16.0)
+                                .color(egui::Color32::from_rgb(50, 50, 50)),
+                        );
                     });
                 });
 
@@ -80,9 +89,11 @@ impl NetworkManagerApp {
                     ui.set_width(330.0);
                     ui.vertical(|ui| {
                         ui.label(egui::RichText::new("🚪 Gateway").strong());
-                        ui.label(egui::RichText::new(&network_info.gateway)
-                            .size(16.0)
-                            .color(egui::Color32::from_rgb(50, 50, 50)));
+                        ui.label(
+                            egui::RichText::new(&network_info.gateway)
+                                .size(16.0)
+                                .color(egui::Color32::from_rgb(50, 50, 50)),
+                        );
                     });
                 });
 
@@ -97,9 +108,11 @@ impl NetworkManagerApp {
                     ui.set_width(340.0);
                     ui.vertical(|ui| {
                         ui.label(egui::RichText::new("📊 Active Devices").strong());
-                        ui.label(egui::RichText::new(network_info.active_devices.to_string())
-                            .size(16.0)
-                            .color(egui::Color32::from_rgb(50, 50, 50)));
+                        ui.label(
+                            egui::RichText::new(network_info.active_devices.to_string())
+                                .size(16.0)
+                                .color(egui::Color32::from_rgb(50, 50, 50)),
+                        );
                     });
                 });
         });
@@ -110,98 +123,125 @@ impl NetworkManagerApp {
             ui.add_space(5.0);
 
             let scanning = *self.scanner.scanning.lock().unwrap();
-            let network_range = self.scanner.network_info.lock().unwrap().network_range.clone();
 
             // Scan Network Button
-            if ui.add_sized(
-                [140.0, 35.0],
-                egui::Button::new(
-                    egui::RichText::new(if scanning { "⏳ Scanning..." } else { "🔍 Scan Network" })
-                        .color(egui::Color32::WHITE)
+            if ui
+                .add_sized(
+                    [140.0, 35.0],
+                    egui::Button::new(
+                        egui::RichText::new(if scanning {
+                            "⏳ Scanning..."
+                        } else {
+                            "🔍 Scan Network"
+                        })
+                        .color(egui::Color32::WHITE),
+                    )
+                    .fill(egui::Color32::from_rgb(0, 120, 215)),
                 )
-                .fill(egui::Color32::from_rgb(0, 120, 215))
-            ).clicked() && !scanning {
-                self.scanner.scan_network(network_range.clone());
+                .clicked()
+                && !scanning
+            {
+                self.scanner.scan_network();
             }
 
             ui.add_space(5.0);
 
             // Refresh Button
-            if ui.add_sized(
-                [120.0, 35.0],
-                egui::Button::new(
-                    egui::RichText::new("🔄 Refresh")
-                        .color(egui::Color32::BLACK)
+            if ui
+                .add_sized(
+                    [120.0, 35.0],
+                    egui::Button::new(egui::RichText::new("🔄 Refresh").color(egui::Color32::BLACK))
+                        .fill(egui::Color32::from_rgb(230, 230, 230)),
                 )
-                .fill(egui::Color32::from_rgb(230, 230, 230))
-            ).clicked() && !scanning {
-                self.scanner.scan_network(network_range);
+                .clicked()
+                && !scanning
+            {
+                self.scanner.scan_network();
             }
 
             ui.add_space(100.0);
 
+            let selected_count = self
+                .scanner
+                .devices
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|d| d.selected)
+                .count();
+
             // Kill Selected Button
-            if ui.add_sized(
-                [160.0, 35.0],
-                egui::Button::new(
-                    egui::RichText::new("✖ Kill Selected (0)")
-                        .color(egui::Color32::WHITE)
+            if ui
+                .add_sized(
+                    [160.0, 35.0],
+                    egui::Button::new(
+                        egui::RichText::new(format!("✖ Kill Selected ({})", selected_count))
+                            .color(egui::Color32::WHITE),
+                    )
+                    .fill(egui::Color32::from_rgb(200, 50, 50)),
                 )
-                .fill(egui::Color32::from_rgb(200, 50, 50))
-            ).clicked() {
+                .clicked()
+            {
                 self.scanner.kill_selected_devices();
             }
 
             ui.add_space(5.0);
 
             // Restore Selected Button
-            if ui.add_sized(
-                [180.0, 35.0],
-                egui::Button::new(
-                    egui::RichText::new("✔ Restore Selected (0)")
-                        .color(egui::Color32::WHITE)
+            if ui
+                .add_sized(
+                    [180.0, 35.0],
+                    egui::Button::new(
+                        egui::RichText::new(format!("✔ Restore Selected ({})", selected_count))
+                            .color(egui::Color32::WHITE),
+                    )
+                    .fill(egui::Color32::from_rgb(50, 150, 50)),
                 )
-                .fill(egui::Color32::from_rgb(50, 150, 50))
-            ).clicked() {
+                .clicked()
+            {
                 self.scanner.restore_selected_devices();
             }
 
             ui.add_space(5.0);
 
             // Restore All Button
-            if ui.add_sized(
-                [130.0, 35.0],
-                egui::Button::new(
-                    egui::RichText::new("✔ Restore All")
-                        .color(egui::Color32::WHITE)
+            if ui
+                .add_sized(
+                    [130.0, 35.0],
+                    egui::Button::new(
+                        egui::RichText::new("✔ Restore All").color(egui::Color32::WHITE),
+                    )
+                    .fill(egui::Color32::from_rgb(60, 130, 60)),
                 )
-                .fill(egui::Color32::from_rgb(60, 130, 60))
-            ).clicked() {
+                .clicked()
+            {
                 self.scanner.restore_all_devices();
             }
 
             ui.add_space(5.0);
 
             // Kill All Button
-            if ui.add_sized(
-                [120.0, 35.0],
-                egui::Button::new(
-                    egui::RichText::new("⚠ Kill All")
-                        .color(egui::Color32::WHITE)
+            if ui
+                .add_sized(
+                    [120.0, 35.0],
+                    egui::Button::new(egui::RichText::new("⚠ Kill All").color(egui::Color32::WHITE))
+                        .fill(egui::Color32::from_rgb(180, 40, 40)),
                 )
-                .fill(egui::Color32::from_rgb(180, 40, 40))
-            ).clicked() {
+                .clicked()
+            {
                 self.scanner.kill_all_devices();
             }
         });
     }
 
     fn render_device_table(&mut self, ui: &mut egui::Ui) {
-        let devices = self.scanner.devices.lock().unwrap();
+        let mut devices = self.scanner.devices.lock().unwrap();
 
-        ui.label(egui::RichText::new(format!("Network Devices ({})", devices.len()))
-            .size(16.0)
-            .strong());
+        ui.label(
+            egui::RichText::new(format!("Network Devices ({})", devices.len()))
+                .size(16.0)
+                .strong(),
+        );
 
         ui.add_space(5.0);
 
@@ -233,55 +273,55 @@ impl NetworkManagerApp {
         egui::ScrollArea::vertical()
             .max_height(400.0)
             .show(ui, |ui| {
-                for (idx, device) in devices.iter().enumerate() {
+                for (idx, device) in devices.iter_mut().enumerate() {
                     let bg_color = if idx % 2 == 0 {
                         egui::Color32::from_rgb(255, 255, 255)
                     } else {
                         egui::Color32::from_rgb(250, 250, 250)
                     };
 
-                    egui::Frame::none()
-                        .fill(bg_color)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.add_space(10.0);
+                    egui::Frame::none().fill(bg_color).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add_space(10.0);
 
-                                // Checkbox
-                                let mut selected = device.selected;
-                                ui.checkbox(&mut selected, "");
+                            // Checkbox
+                            ui.checkbox(&mut device.selected, "");
 
-                                ui.add_space(30.0);
+                            ui.add_space(30.0);
 
-                                // IP Address
-                                ui.label(egui::RichText::new(&device.ip_address).size(12.0));
-                                ui.add_space(70.0);
+                            // IP Address
+                            ui.label(egui::RichText::new(&device.ip_address).size(12.0));
+                            ui.add_space(70.0);
 
-                                // Hostname
-                                ui.label(egui::RichText::new(&device.hostname).size(12.0));
-                                ui.add_space(50.0);
+                            // Hostname
+                            ui.label(egui::RichText::new(&device.hostname).size(12.0));
+                            ui.add_space(50.0);
 
-                                // MAC Address
-                                ui.label(egui::RichText::new(&device.mac_address).size(12.0));
-                                ui.add_space(50.0);
+                            // MAC Address
+                            ui.label(egui::RichText::new(&device.mac_address).size(12.0));
+                            ui.add_space(50.0);
 
-                                // Vendor
-                                ui.label(egui::RichText::new(&device.vendor).size(12.0));
-                                ui.add_space(70.0);
+                            // Vendor
+                            ui.label(egui::RichText::new(&device.vendor).size(12.0));
+                            ui.add_space(70.0);
 
-                                // Status
-                                let status_color = match device.status {
-                                    DeviceStatus::Active => egui::Color32::from_rgb(50, 150, 50),
-                                    DeviceStatus::Inactive => egui::Color32::from_rgb(100, 100, 100),
-                                    DeviceStatus::Blocked => egui::Color32::from_rgb(200, 50, 50),
-                                    DeviceStatus::Unknown => egui::Color32::from_rgb(150, 150, 150),
-                                };
-                                ui.colored_label(status_color, device.status.as_str());
-                                ui.add_space(60.0);
+                            // Status
+                            let status_color = match device.status {
+                                DeviceStatus::Active => egui::Color32::from_rgb(50, 150, 50),
+                                DeviceStatus::Inactive => egui::Color32::from_rgb(100, 100, 100),
+                                DeviceStatus::Blocked => egui::Color32::from_rgb(200, 50, 50),
+                                DeviceStatus::Unknown => egui::Color32::from_rgb(150, 150, 150),
+                            };
+                            ui.colored_label(status_color, device.status.as_str());
+                            ui.add_space(60.0);
 
-                                // Response Time
-                                ui.label(egui::RichText::new(format!("{:.1}ms", device.response_time)).size(12.0));
-                            });
+                            // Response Time
+                            ui.label(
+                                egui::RichText::new(format!("{:.1}ms", device.response_time))
+                                    .size(12.0),
+                            );
                         });
+                    });
 
                     ui.add_space(2.0);
                 }
@@ -291,6 +331,14 @@ impl NetworkManagerApp {
 
 impl eframe::App for NetworkManagerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Auto-refresh logic
+        if self.auto_refresh && self.last_scan.elapsed() >= Duration::from_secs(60) {
+            if !*self.scanner.scanning.lock().unwrap() {
+                self.scanner.scan_network();
+                self.last_scan = Instant::now();
+            }
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.add_space(10.0);
 
@@ -310,6 +358,6 @@ impl eframe::App for NetworkManagerApp {
         });
 
         // Request repaint for smooth updates
-        ctx.request_repaint();
+        ctx.request_repaint_after(Duration::from_millis(100));
     }
 }

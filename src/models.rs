@@ -36,19 +36,6 @@ pub struct NetworkDevice {
     pub selected: bool,
 }
 
-impl NetworkDevice {
-    pub fn new(ip_address: String) -> Self {
-        Self {
-            ip_address,
-            hostname: "Unknown".to_string(),
-            mac_address: "Unknown".to_string(),
-            vendor: "Unknown".to_string(),
-            status: DeviceStatus::Inactive,
-            response_time: 0.0,
-            selected: false,
-        }
-    }
-}
 
 // Struct to hold information about the local network
 #[derive(Debug, Clone, Default)]
