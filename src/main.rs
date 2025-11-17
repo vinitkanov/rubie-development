@@ -7,6 +7,11 @@ mod disconnect;
 
 use anyhow::Result;
 use eframe::egui;
+use once_cell::sync::Lazy;
+use tokio::runtime::Runtime;
+
+pub static TOKIO_RUNTIME: Lazy<Runtime> =
+    Lazy::new(|| Runtime::new().expect("Failed to create Tokio runtime"));
 
 fn main() -> Result<()> {
     let options = eframe::NativeOptions {

@@ -22,7 +22,7 @@ impl NetworkScanner {
         let network_info = Arc::clone(&self.network_info);
         let scanning = Arc::clone(&self.scanning);
 
-        tokio::spawn(async move {
+        crate::TOKIO_RUNTIME.spawn(async move {
             {
                 let mut scan_flag = scanning.lock().unwrap();
                 *scan_flag = true;

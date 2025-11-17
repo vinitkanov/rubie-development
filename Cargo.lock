@@ -1732,6 +1732,7 @@ dependencies = [
  "eframe",
  "egui",
  "ipnetwork",
+ "once_cell",
  "pnet",
  "serde",
  "serde_json",
