@@ -41,7 +41,7 @@ impl NetworkScanner {
         let (device_sender, mut device_receiver) = mpsc::unbounded_channel();
 
         // ARP listener task
-        tokio::spawn(async move {
+        tokio::task::spawn_blocking(move || {
             loop {
                 match rx.next() {
                     Ok(packet) => {
@@ -85,13 +85,14 @@ impl NetworkScanner {
             IpNetwork::V4(net) => net.iter(),
             _ => return Err(anyhow::anyhow!("Only IPv4 networks are supported")),
         };
-        tokio::spawn(async move {
+
+        tokio::task::spawn_blocking(move || {
             for ip in network_iter {
                 if ip == source_ip {
                     continue;
                 }
                 Self::send_arp_request(&mut *tx, &interface, source_ip, ip);
-                tokio::time::sleep(Duration::from_millis(10)).await;
+                std::thread::sleep(Duration::from_millis(10));
             }
         });
 
