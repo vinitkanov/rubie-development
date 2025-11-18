@@ -10,7 +10,7 @@ use crate::{
 use dashmap::DashMap;
 use eframe::egui;
 use pnet::datalink::NetworkInterface;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -19,7 +19,7 @@ pub struct NetworkManagerApp {
     auto_refresh: bool,
     last_scan: Instant,
     interface_selector: InterfaceSelector,
-    selected_interface: Option<NetworkInterface>,
+    selected_interface: Arc<Mutex<Option<NetworkInterface>>>,
     device_receiver: mpsc::UnboundedReceiver<NetworkDevice>,
     killer: Killer,
 }
@@ -28,7 +28,8 @@ impl NetworkManagerApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let (_device_sender, device_receiver) = mpsc::unbounded_channel();
         let devices = Arc::new(DashMap::new());
-        let killer = Killer::new(devices.clone());
+        let selected_interface = Arc::new(Mutex::new(None));
+        let killer = Killer::new(devices.clone(), selected_interface.clone());
 
         let killer_clone = killer.clone();
         TOKIO_RUNTIME.spawn(async move {
@@ -36,11 +37,11 @@ impl NetworkManagerApp {
         });
 
         Self {
-            devices: devices.clone(),
+            devices,
             auto_refresh: false,
             last_scan: Instant::now(),
             interface_selector: InterfaceSelector::new(),
-            selected_interface: None,
+            selected_interface,
             device_receiver,
             killer,
         }
@@ -247,10 +248,11 @@ impl eframe::App for NetworkManagerApp {
                 self.devices.insert(device.mac_address.clone(), device);
             }
         }
-        if self.selected_interface.is_none() {
+
+        if self.selected_interface.lock().unwrap().is_none() {
             if self.interface_selector.show(ctx) {
-                self.selected_interface = self.interface_selector.get_selected_interface();
-                if let Some(interface) = &self.selected_interface {
+                if let Some(interface) = self.interface_selector.get_selected_interface() {
+                    *self.selected_interface.lock().unwrap() = Some(interface.clone());
                     let (device_sender, device_receiver) = mpsc::unbounded_channel();
                     self.device_receiver = device_receiver;
                     let scanner =
@@ -266,13 +268,13 @@ impl eframe::App for NetworkManagerApp {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.add_space(10.0);
                 self.render_header(ui);
-                ui.add_space(15.0);
+                ui.add_space(1.0);
                 self.render_info_panel(ui);
-                ui.add_space(15.0);
+                ui.add_space(1.0);
                 self.render_control_buttons(ui);
-                ui.add_space(15.0);
+                ui.add_space(1.0);
                 ui.separator();
-                ui.add_space(10.0);
+                ui.add_space(1.0);
                 self.render_device_table(ui);
             });
         }
