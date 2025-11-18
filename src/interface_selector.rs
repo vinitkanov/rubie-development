@@ -37,11 +37,11 @@ impl InterfaceSelector {
                                 .selectable_value(
                                     &mut self.selected_interface,
                                     Some(iface.clone()),
-                                    &iface.name,
+                                    &iface.description,
                                 )
                                 .clicked()
                             {
-                                self.selected_interface_name = iface.name.clone();
+                                self.selected_interface_name = iface.description.clone();
                             }
                         }
                     });
