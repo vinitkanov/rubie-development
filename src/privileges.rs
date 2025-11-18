@@ -1,5 +1,3 @@
-use std::ptr;
-
 #[cfg(windows)]
 pub fn is_admin() -> bool {
     use std::mem;
@@ -7,7 +5,7 @@ pub fn is_admin() -> bool {
     use winapi::um::handleapi::CloseHandle;
     use winapi::um::processthreadsapi::GetCurrentProcess;
     use winapi::um::processthreadsapi::OpenProcessToken;
-    use winapi::um::securitybaseapi::CheckTokenMembership;
+    use winapi::um::securitybaseapi::GetTokenInformation;
     use winapi::um::winnt::{TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 
     let mut token_handle = ptr::null_mut();
@@ -21,23 +19,21 @@ pub fn is_admin() -> bool {
     let mut return_length = 0;
     let elevation_size = mem::size_of::<TOKEN_ELEVATION>() as u32;
 
-    unsafe {
-        if CheckTokenMembership(
+    let success = unsafe {
+        GetTokenInformation(
             token_handle,
+            TokenElevation,
             &mut elevation as *mut _ as *mut _,
+            elevation_size,
             &mut return_length,
-        ) == 0
-        {
-            CloseHandle(token_handle);
-            return false;
-        }
-    }
+        ) != 0
+    };
 
     unsafe {
         CloseHandle(token_handle);
     }
 
-    elevation.TokenIsElevated != 0
+    success && elevation.TokenIsElevated != 0
 }
 
 #[cfg(windows)]
