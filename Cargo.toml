@@ -17,7 +17,7 @@ pnet = "0.34"
 default-net = "0.10.0"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["winuser", "windef"] }
+winapi = { version = "0.3", features = ["winuser", "windef", "securitybaseapi", "handleapi", "shellapi", "winnt", "processthreadsapi"] }
 
 [profile.release]
 opt-level = 3
