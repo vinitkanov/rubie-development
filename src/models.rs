@@ -34,4 +34,6 @@ pub struct NetworkDevice {
     pub last_arp_time: Option<Instant>,
     #[serde(skip)]
     pub selected: bool,
+    #[serde(skip)]
+    pub is_killed: bool,
 }

@@ -1,30 +1,32 @@
 use crate::models::{DeviceStatus, NetworkDevice};
 use anyhow::Result;
+use dashmap::DashMap;
 use ipnetwork::IpNetwork;
 use pnet::datalink::{self, Channel, MacAddr, NetworkInterface};
 use pnet::packet::arp::{ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPacket};
 use pnet::packet::ethernet::{EtherTypes, EthernetPacket, MutableEthernetPacket};
 use pnet::packet::Packet;
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::time;
 
 pub struct NetworkScanner {
     interface: NetworkInterface,
-    devices: Arc<Mutex<Vec<NetworkDevice>>>,
+    devices: Arc<DashMap<String, NetworkDevice>>,
     sender: mpsc::UnboundedSender<NetworkDevice>,
 }
 
 impl NetworkScanner {
     pub fn new(
         interface: NetworkInterface,
+        devices: Arc<DashMap<String, NetworkDevice>>,
         sender: mpsc::UnboundedSender<NetworkDevice>,
     ) -> Self {
         Self {
             interface,
-            devices: Arc::new(Mutex::new(Vec::new())),
+            devices,
             sender,
         }
     }
@@ -38,7 +40,6 @@ impl NetworkScanner {
 
         let devices = self.devices.clone();
         let sender = self.sender.clone();
-        let _interface = self.interface.clone();
 
         // ARP listener task
         tokio::spawn(async move {
@@ -138,7 +139,7 @@ impl NetworkScanner {
 
     async fn on_packet_arrival(
         rx: &mut Box<dyn datalink::DataLinkReceiver>,
-        devices: &Arc<Mutex<Vec<NetworkDevice>>>,
+        devices: &Arc<DashMap<String, NetworkDevice>>,
         sender: &mpsc::UnboundedSender<NetworkDevice>,
     ) -> Result<()> {
         match rx.next() {
@@ -147,26 +148,24 @@ impl NetworkScanner {
                     if ethernet_packet.get_ethertype() == EtherTypes::Arp {
                         if let Some(arp_packet) = ArpPacket::new(ethernet_packet.payload()) {
                             if arp_packet.get_operation() == ArpOperations::Reply {
-                                let mut devices = devices.lock().unwrap();
                                 let ip_address = arp_packet.get_sender_proto_addr().to_string();
                                 let mac_address = arp_packet.get_sender_hw_addr().to_string();
 
-                                if let Some(device) =
-                                    devices.iter_mut().find(|d| d.ip_address == ip_address)
-                                {
+                                if let Some(mut device) = devices.get_mut(&mac_address) {
                                     device.last_arp_time = Some(Instant::now());
                                     device.status = DeviceStatus::Active;
                                 } else {
                                     let device = NetworkDevice {
                                         ip_address,
-                                        mac_address,
+                                        mac_address: mac_address.clone(),
                                         hostname: "".to_string(),
                                         vendor: "".to_string(),
                                         status: DeviceStatus::Active,
                                         last_arp_time: Some(Instant::now()),
                                         selected: false,
+                                        is_killed: false,
                                     };
-                                    devices.push(device.clone());
+                                    devices.insert(mac_address, device.clone());
                                     sender.send(device)?;
                                 }
                             }
@@ -181,23 +180,16 @@ impl NetworkScanner {
         Ok(())
     }
 
-    async fn start_background_scan(devices: Arc<Mutex<Vec<NetworkDevice>>>) {
-        let mut interval = time::interval(Duration::from_secs(10));
+    async fn start_background_scan(devices: Arc<DashMap<String, NetworkDevice>>) {
         let mut is_alive_interval = time::interval(Duration::from_secs(30));
 
         loop {
-            tokio::select! {
-                _ = interval.tick() => {
-                    // Refresh ARP cache
-                }
-                _ = is_alive_interval.tick() => {
-                    let mut devices = devices.lock().unwrap();
-                    for device in devices.iter_mut() {
-                        if let Some(last_arp_time) = device.last_arp_time {
-                            if last_arp_time.elapsed() > Duration::from_secs(60) {
-                                device.status = DeviceStatus::Inactive;
-                            }
-                        }
+            is_alive_interval.tick().await;
+            for mut item in devices.iter_mut() {
+                let device = item.value_mut();
+                if let Some(last_arp_time) = device.last_arp_time {
+                    if last_arp_time.elapsed() > Duration::from_secs(60) {
+                        device.status = DeviceStatus::Inactive;
                     }
                 }
             }

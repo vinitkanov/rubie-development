@@ -5,6 +5,7 @@ mod restore;
 mod disconnect;
 mod privileges;
 mod interface_selector;
+mod killer;
 
 use anyhow::Result;
 use eframe::egui;
