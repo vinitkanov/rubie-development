@@ -21,18 +21,6 @@ pub fn kill_selected_devices(devices: &Arc<Mutex<Vec<NetworkDevice>>>) {
     }
 }
 
-pub fn kill_all_devices(devices: &Arc<Mutex<Vec<NetworkDevice>>>) {
-    let mut devices_lock = devices.lock().unwrap();
-    for device in devices_lock.iter_mut() {
-        if device.status != DeviceStatus::Blocked {
-            device.status = DeviceStatus::Blocked;
-            if let Err(e) = poison_target(device.clone()) {
-                eprintln!("Failed to poison target: {}", e);
-            }
-        }
-    }
-}
-
 fn poison_target(device: NetworkDevice) -> Result<()> {
     let interface = get_default_interface()?;
     let source_ip = interface

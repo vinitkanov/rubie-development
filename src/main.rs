@@ -1,5 +1,4 @@
 mod models;
-mod network;
 mod ui;
 mod scanner;
 mod restore;

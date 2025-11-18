@@ -1,4 +1,4 @@
-use crate::models::{DeviceStatus, NetworkDevice, NetworkInfo};
+use crate::models::{DeviceStatus, NetworkDevice};
 use anyhow::Result;
 use ipnetwork::IpNetwork;
 use pnet::datalink::{self, Channel, MacAddr, NetworkInterface};
@@ -6,17 +6,68 @@ use pnet::packet::arp::{ArpHardwareTypes, ArpOperations, ArpPacket, MutableArpPa
 use pnet::packet::ethernet::{EtherTypes, EthernetPacket, MutableEthernetPacket};
 use pnet::packet::Packet;
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tokio::time;
 
-#[derive(Clone, Default)]
-pub struct NetworkScanner;
+pub struct NetworkScanner {
+    interface: NetworkInterface,
+    devices: Arc<Mutex<Vec<NetworkDevice>>>,
+    sender: mpsc::UnboundedSender<NetworkDevice>,
+}
 
 impl NetworkScanner {
+    pub fn new(
+        interface: NetworkInterface,
+        sender: mpsc::UnboundedSender<NetworkDevice>,
+    ) -> Self {
+        Self {
+            interface,
+            devices: Arc::new(Mutex::new(Vec::new())),
+            sender,
+        }
+    }
 
+    pub async fn start(&self) -> Result<()> {
+        let (mut tx, mut rx) = match datalink::channel(&self.interface, Default::default()) {
+            Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
+            Ok(_) => return Err(anyhow::anyhow!("Unsupported channel type")),
+            Err(e) => return Err(anyhow::anyhow!("Failed to create channel: {}", e)),
+        };
 
-    pub async fn run_arp_scan(interface: NetworkInterface) -> Result<Vec<NetworkDevice>> {
-        let source_ip = interface
+        let devices = self.devices.clone();
+        let sender = self.sender.clone();
+        let _interface = self.interface.clone();
+
+        // ARP listener task
+        tokio::spawn(async move {
+            loop {
+                match Self::on_packet_arrival(&mut rx, &devices, &sender).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("Error receiving packet: {}", e);
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Background scanning task
+        let devices = self.devices.clone();
+        tokio::spawn(async move {
+            Self::start_background_scan(devices).await;
+        });
+
+        // Initial ARP probe
+        self.probe_devices(&mut tx).await?;
+
+        Ok(())
+    }
+
+    async fn probe_devices(&self, tx: &mut Box<dyn datalink::DataLinkSender>) -> Result<()> {
+        let source_ip = self
+            .interface
             .ips
             .iter()
             .find(|ip| ip.is_ipv4())
@@ -26,94 +77,30 @@ impl NetworkScanner {
             })
             .ok_or_else(|| anyhow::anyhow!("No IPv4 address found"))?;
 
-        let network = interface
+        let network = self
+            .interface
             .ips
             .iter()
             .find(|ip| ip.is_ipv4())
             .ok_or_else(|| anyhow::anyhow!("No IPv4 network found"))?;
 
-        let (mut tx, mut rx) = match datalink::channel(&interface, Default::default()) {
-            Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
-            Ok(_) => return Err(anyhow::anyhow!("Unsupported channel type")),
-            Err(e) => return Err(anyhow::anyhow!("Failed to create channel: {}", e)),
-        };
-
-        let (device_sender, mut device_receiver) = mpsc::unbounded_channel();
-
-        // ARP listener task
-        tokio::task::spawn_blocking(move || {
-            loop {
-                match rx.next() {
-                    Ok(packet) => {
-                        if let Some(ethernet_packet) = EthernetPacket::new(packet) {
-                            if ethernet_packet.get_ethertype() == EtherTypes::Arp {
-                                if let Some(arp_packet) = ArpPacket::new(ethernet_packet.payload())
-                                {
-                                    if arp_packet.get_operation() == ArpOperations::Reply {
-                                        let device = NetworkDevice {
-                                            ip_address: arp_packet
-                                                .get_sender_proto_addr()
-                                                .to_string(),
-                                            mac_address: arp_packet
-                                                .get_sender_hw_addr()
-                                                .to_string(),
-                                            hostname: "".to_string(), // ARP doesn't provide hostname
-                                            vendor: "".to_string(), // Vendor lookup can be added later
-                                            status: DeviceStatus::Active,
-                                            response_time: 0.0, // RTT is not measured in ARP scan
-                                            selected: false,
-                                        };
-                                        if device_sender.send(device).is_err() {
-                                            // Receiver dropped
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Error receiving packet: {}", e);
-                        break;
-                    }
-                }
-            }
-        });
-
-        // ARP sender task
         let network_iter = match network {
             IpNetwork::V4(net) => net.iter(),
             _ => return Err(anyhow::anyhow!("Only IPv4 networks are supported")),
         };
 
-        tokio::task::spawn_blocking(move || {
-            for ip in network_iter {
-                if ip == source_ip {
+        for ip in network_iter.step_by(256) {
+            for i in 1..255 {
+                let target_ip = Ipv4Addr::new(ip.octets()[0], ip.octets()[1], ip.octets()[2], i);
+                if target_ip == source_ip {
                     continue;
                 }
-                Self::send_arp_request(&mut *tx, &interface, source_ip, ip);
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        });
 
-        let mut devices = Vec::new();
-        let scan_duration = Duration::from_secs(5);
-        let start_time = Instant::now();
-
-        while start_time.elapsed() < scan_duration {
-            if let Ok(Some(device)) =
-                tokio::time::timeout(Duration::from_millis(100), device_receiver.recv()).await
-            {
-                if !devices
-                    .iter()
-                    .any(|dev: &NetworkDevice| dev.ip_address == device.ip_address)
-                {
-                    devices.push(device);
-                }
+                Self::send_arp_request(&mut **tx, &self.interface, source_ip, target_ip);
             }
         }
 
-        Ok(devices)
+        Ok(())
     }
 
     fn send_arp_request(
@@ -149,46 +136,71 @@ impl NetworkScanner {
         tx.send_to(ethernet_packet.packet(), None);
     }
 
-    pub fn get_local_network_info(interface: NetworkInterface) -> Result<NetworkInfo> {
-        let default_gateway = default_net::get_default_gateway()
-            .map_err(|e| anyhow::anyhow!("Failed to get default gateway: {}", e))?;
+    async fn on_packet_arrival(
+        rx: &mut Box<dyn datalink::DataLinkReceiver>,
+        devices: &Arc<Mutex<Vec<NetworkDevice>>>,
+        sender: &mpsc::UnboundedSender<NetworkDevice>,
+    ) -> Result<()> {
+        match rx.next() {
+            Ok(packet) => {
+                if let Some(ethernet_packet) = EthernetPacket::new(packet) {
+                    if ethernet_packet.get_ethertype() == EtherTypes::Arp {
+                        if let Some(arp_packet) = ArpPacket::new(ethernet_packet.payload()) {
+                            if arp_packet.get_operation() == ArpOperations::Reply {
+                                let mut devices = devices.lock().unwrap();
+                                let ip_address = arp_packet.get_sender_proto_addr().to_string();
+                                let mac_address = arp_packet.get_sender_hw_addr().to_string();
 
-        let network = interface
-            .ips
-            .iter()
-            .find(|ip| ip.is_ipv4())
-            .ok_or_else(|| anyhow::anyhow!("No IPv4 network found"))?;
-
-        let mut network_info = NetworkInfo::default();
-        network_info.network_range = network.to_string();
-        network_info.gateway = default_gateway.ip_addr.to_string();
-
-        Ok(network_info)
+                                if let Some(device) =
+                                    devices.iter_mut().find(|d| d.ip_address == ip_address)
+                                {
+                                    device.last_arp_time = Some(Instant::now());
+                                    device.status = DeviceStatus::Active;
+                                } else {
+                                    let device = NetworkDevice {
+                                        ip_address,
+                                        mac_address,
+                                        hostname: "".to_string(),
+                                        vendor: "".to_string(),
+                                        status: DeviceStatus::Active,
+                                        last_arp_time: Some(Instant::now()),
+                                        selected: false,
+                                    };
+                                    devices.push(device.clone());
+                                    sender.send(device)?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Error receiving packet: {}", e));
+            }
+        }
+        Ok(())
     }
 
-}
+    async fn start_background_scan(devices: Arc<Mutex<Vec<NetworkDevice>>>) {
+        let mut interval = time::interval(Duration::from_secs(10));
+        let mut is_alive_interval = time::interval(Duration::from_secs(30));
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_get_local_network_info() {
-        let interfaces = datalink::interfaces();
-        let interface = interfaces
-            .into_iter()
-            .find(|iface| {
-                iface.is_up()
-                    && !iface.is_loopback()
-                    && iface.mac.is_some()
-                    && iface.ips.iter().any(|ip| ip.is_ipv4())
-            })
-            .expect("No suitable network interface found for testing");
-
-        let result = NetworkScanner::get_local_network_info(interface);
-        assert!(result.is_ok());
-        let info = result.unwrap();
-        assert!(!info.network_range.is_empty());
-        assert!(!info.gateway.is_empty());
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    // Refresh ARP cache
+                }
+                _ = is_alive_interval.tick() => {
+                    let mut devices = devices.lock().unwrap();
+                    for device in devices.iter_mut() {
+                        if let Some(last_arp_time) = device.last_arp_time {
+                            if last_arp_time.elapsed() > Duration::from_secs(60) {
+                                device.status = DeviceStatus::Inactive;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
