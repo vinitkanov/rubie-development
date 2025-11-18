@@ -2,27 +2,27 @@ use crate::models::DeviceStatus;
 use crate::network::NetworkScanner;
 use eframe::egui;
 use std::time::{Duration, Instant};
+use crate::interface_selector::InterfaceSelector;
+use pnet::datalink::NetworkInterface;
 
 pub struct NetworkManagerApp {
     scanner: NetworkScanner,
     auto_refresh: bool,
     last_scan: Instant,
+    interface_selector: InterfaceSelector,
+    selected_interface: Option<NetworkInterface>,
 }
 
 impl NetworkManagerApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let scanner = NetworkScanner::new();
 
-        // Get initial network info
-        if let Ok(info) = scanner.get_local_network_info() {
-            let mut network_info = scanner.network_info.lock().unwrap();
-            *network_info = info;
-        }
-
         Self {
             scanner,
             auto_refresh: false,
             last_scan: Instant::now(),
+            interface_selector: InterfaceSelector::new(),
+            selected_interface: None,
         }
     }
 
@@ -331,33 +331,47 @@ impl NetworkManagerApp {
 
 impl eframe::App for NetworkManagerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Auto-refresh logic
-        if self.auto_refresh && self.last_scan.elapsed() >= Duration::from_secs(60) {
-            if !*self.scanner.scanning.lock().unwrap() {
-                self.scanner.scan_network();
-                self.last_scan = Instant::now();
+        if self.selected_interface.is_none() {
+            if self.interface_selector.show(ctx) {
+                self.selected_interface = self.interface_selector.get_selected_interface();
+                if let Some(interface) = &self.selected_interface {
+                    *self.scanner.interface.lock().unwrap() = Some(interface.clone());
+                    if let Ok(info) = self.scanner.get_local_network_info() {
+                        let mut network_info = self.scanner.network_info.lock().unwrap();
+                        *network_info = info;
+                    }
+                    self.scanner.scan_network();
+                }
             }
+        } else {
+            // Auto-refresh logic
+            if self.auto_refresh && self.last_scan.elapsed() >= Duration::from_secs(60) {
+                if !*self.scanner.scanning.lock().unwrap() {
+                    self.scanner.scan_network();
+                    self.last_scan = Instant::now();
+                }
+            }
+
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.add_space(10.0);
+
+                self.render_header(ui);
+                ui.add_space(15.0);
+
+                self.render_info_panel(ui);
+                ui.add_space(15.0);
+
+                self.render_control_buttons(ui);
+                ui.add_space(15.0);
+
+                ui.separator();
+                ui.add_space(10.0);
+
+                self.render_device_table(ui);
+            });
+
+            // Request repaint for smooth updates
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_space(10.0);
-
-            self.render_header(ui);
-            ui.add_space(15.0);
-
-            self.render_info_panel(ui);
-            ui.add_space(15.0);
-
-            self.render_control_buttons(ui);
-            ui.add_space(15.0);
-
-            ui.separator();
-            ui.add_space(10.0);
-
-            self.render_device_table(ui);
-        });
-
-        // Request repaint for smooth updates
-        ctx.request_repaint_after(Duration::from_millis(100));
     }
 }

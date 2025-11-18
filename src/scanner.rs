@@ -15,8 +15,7 @@ pub struct NetworkScanner;
 impl NetworkScanner {
 
 
-    pub async fn run_arp_scan() -> Result<Vec<NetworkDevice>> {
-        let interface = Self::get_default_interface()?;
+    pub async fn run_arp_scan(interface: NetworkInterface) -> Result<Vec<NetworkDevice>> {
         let source_ip = interface
             .ips
             .iter()
@@ -149,24 +148,11 @@ impl NetworkScanner {
         tx.send_to(ethernet_packet.packet(), None);
     }
 
-    fn get_default_interface() -> Result<NetworkInterface> {
-        datalink::interfaces()
-            .into_iter()
-            .find(|iface| {
-                iface.is_up()
-                    && !iface.is_loopback()
-                    && iface.mac.is_some()
-                    && iface.ips.iter().any(|ip| ip.is_ipv4())
-            })
-            .ok_or_else(|| anyhow::anyhow!("No suitable network interface found"))
-    }
-
-    pub fn get_local_network_info() -> Result<NetworkInfo> {
+    pub fn get_local_network_info(interface: NetworkInterface) -> Result<NetworkInfo> {
         let default_gateway = default_net::get_default_gateway()
             .map_err(|e| anyhow::anyhow!("Failed to get default gateway: {}", e))?;
-        let default_interface = Self::get_default_interface()?;
 
-        let network = default_interface
+        let network = interface
             .ips
             .iter()
             .find(|ip| ip.is_ipv4())
@@ -187,7 +173,18 @@ mod tests {
 
     #[test]
     fn test_get_local_network_info() {
-        let result = NetworkScanner::get_local_network_info();
+        let interfaces = datalink::interfaces();
+        let interface = interfaces
+            .into_iter()
+            .find(|iface| {
+                iface.is_up()
+                    && !iface.is_loopback()
+                    && iface.mac.is_some()
+                    && iface.ips.iter().any(|ip| ip.is_ipv4())
+            })
+            .expect("No suitable network interface found for testing");
+
+        let result = NetworkScanner::get_local_network_info(interface);
         assert!(result.is_ok());
         let info = result.unwrap();
         assert!(!info.network_range.is_empty());

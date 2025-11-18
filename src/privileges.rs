@@ -1,0 +1,76 @@
+
+#[cfg(windows)]
+pub fn is_admin() -> bool {
+    use winapi::um::processthreadsapi::GetCurrentProcess;
+    use winapi::um::securitybaseapi::CheckTokenMembership;
+    use winapi::um::winnt::{TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use winapi::um::handleapi::CloseHandle;
+    use winapi::um::processthreadsapi::OpenProcessToken;
+    use std::ptr;
+    use std::mem;
+
+    let mut token_handle = ptr::null_mut();
+    unsafe {
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle) == 0 {
+            return false;
+        }
+    }
+
+    let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+    let mut return_length = 0;
+    let elevation_size = mem::size_of::<TOKEN_ELEVATION>() as u32;
+
+    unsafe {
+        if CheckTokenMembership(token_handle, &mut elevation as *mut _ as *mut _, &mut return_length) == 0 {
+            CloseHandle(token_handle);
+            return false;
+        }
+    }
+
+    unsafe {
+        CloseHandle(token_handle);
+    }
+
+    elevation.TokenIsElevated != 0
+}
+
+#[cfg(windows)]
+pub fn relaunch_as_admin() -> anyhow::Result<()> {
+    use std::env;
+    use std::process;
+    use winapi::um::shellapi::ShellExecuteW;
+    use winapi::um::winuser::SW_SHOW;
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    let exe = env::current_exe()?;
+    let exe_str: Vec<u16> = OsStr::new(&exe)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let params_str: Vec<u16> = OsStr::new("")
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let verb_str: Vec<u16> = OsStr::new("runas")
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+
+    let result = unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            verb_str.as_ptr(),
+            exe_str.as_ptr(),
+            params_str.as_ptr(),
+            ptr::null_mut(),
+            SW_SHOW,
+        )
+    };
+
+    if result as usize > 32 {
+        process::exit(0);
+    } else {
+        return Err(anyhow::anyhow!("Failed to relaunch as admin"));
+    }
+}
