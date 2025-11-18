@@ -12,7 +12,7 @@ impl InterfaceSelector {
     pub fn new() -> Self {
         let interfaces = pnet::datalink::interfaces()
             .into_iter()
-            .filter(|iface| iface.is_up() && !iface.is_loopback() && iface.mac.is_some())
+            .filter(|iface| !iface.is_loopback() && !iface.ips.is_empty())
             .collect();
         Self {
             interfaces,
