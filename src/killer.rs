@@ -6,18 +6,22 @@ use pnet::packet::arp::{ArpHardwareTypes, ArpOperations, MutableArpPacket};
 use pnet::packet::ethernet::{EtherTypes, MutableEthernetPacket};
 use pnet::packet::Packet;
 use std::net::Ipv4Addr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time;
 
 #[derive(Clone)]
 pub struct Killer {
     devices: Arc<DashMap<String, NetworkDevice>>,
+    interface: Arc<Mutex<Option<NetworkInterface>>>,
 }
 
 impl Killer {
-    pub fn new(devices: Arc<DashMap<String, NetworkDevice>>) -> Self {
-        Self { devices }
+    pub fn new(
+        devices: Arc<DashMap<String, NetworkDevice>>,
+        interface: Arc<Mutex<Option<NetworkInterface>>>,
+    ) -> Self {
+        Self { devices, interface }
     }
 
     pub async fn start(&self) {
@@ -29,19 +33,21 @@ impl Killer {
     }
 
     async fn spoof_targets(&self) {
-        let interface = match get_default_interface() {
-            Ok(interface) => interface,
-            Err(e) => {
-                eprintln!("Failed to get default interface: {}", e);
+        let interface = match self.interface.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => {
+                eprintln!("Mutex poisoned: {}", poisoned);
                 return;
             }
         };
 
-        for item in self.devices.iter() {
-            let device = item.value();
-            if device.is_killed {
-                if let Err(e) = self.spoof_target(&interface, device).await {
-                    eprintln!("Failed to spoof target: {}", e);
+        if let Some(interface) = interface {
+            for item in self.devices.iter() {
+                let device = item.value();
+                if device.is_killed {
+                    if let Err(e) = self.spoof_target(&interface, device).await {
+                        eprintln!("Failed to spoof target: {}", e);
+                    }
                 }
             }
         }
@@ -138,16 +144,4 @@ fn send_arp_reply(
     ethernet_packet.set_payload(arp_packet.packet());
 
     tx.send_to(ethernet_packet.packet(), None);
-}
-
-fn get_default_interface() -> Result<NetworkInterface> {
-    datalink::interfaces()
-        .into_iter()
-        .find(|iface| {
-            iface.is_up()
-                && !iface.is_loopback()
-                && iface.mac.is_some()
-                && iface.ips.iter().any(|ip| ip.is_ipv4())
-        })
-        .ok_or_else(|| anyhow::anyhow!("No suitable network interface found"))
 }
