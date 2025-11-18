@@ -21,18 +21,6 @@ pub fn restore_selected_devices(devices: &Arc<Mutex<Vec<NetworkDevice>>>) {
     }
 }
 
-pub fn restore_all_devices(devices: &Arc<Mutex<Vec<NetworkDevice>>>) {
-    let mut devices_lock = devices.lock().unwrap();
-    for device in devices_lock.iter_mut() {
-        if device.status == DeviceStatus::Blocked {
-            device.status = DeviceStatus::Active;
-            if let Err(e) = restore_target(device.clone()) {
-                eprintln!("Failed to restore target: {}", e);
-            }
-        }
-    }
-}
-
 fn restore_target(device: NetworkDevice) -> Result<()> {
     let interface = get_default_interface()?;
     let gateway_ip = default_net::get_default_gateway()
