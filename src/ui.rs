@@ -22,7 +22,6 @@ pub struct NetworkManagerApp {
     selected_interface: Arc<Mutex<Option<NetworkInterface>>>,
     device_receiver: mpsc::UnboundedReceiver<NetworkDevice>,
     command_sender: Option<mpsc::UnboundedSender<ScanCommand>>,
-    killer: Killer,
 }
 
 impl NetworkManagerApp {
@@ -45,7 +44,6 @@ impl NetworkManagerApp {
             selected_interface,
             device_receiver,
             command_sender: None,
-            killer,
         }
     }
 
