@@ -18,6 +18,7 @@ use std::net::IpAddr;
 
 pub struct NetworkManagerApp {
     devices: Arc<DashMap<IpAddr, NetworkDevice>>,
+    sorted_devices: Vec<IpAddr>,
     auto_refresh: bool,
     last_scan: Instant,
     select_all: bool,
@@ -45,6 +46,7 @@ impl NetworkManagerApp {
 
         Self {
             devices,
+            sorted_devices: Vec::new(),
             auto_refresh: false,
             last_scan: Instant::now(),
             select_all: false,
@@ -261,12 +263,7 @@ impl NetworkManagerApp {
         egui::ScrollArea::vertical()
             .max_height(400.0)
             .show(ui, |ui| {
-                let devices_clone = self.devices.clone();
-                let mut devices_sorted: Vec<_> = devices_clone.iter().collect();
-                devices_sorted.sort_by_key(|d| d.key().clone());
-
-                for (idx, item) in devices_sorted.iter().enumerate() {
-                    let ip = item.key();
+                for (idx, ip) in self.sorted_devices.iter().enumerate() {
                     if let Some(mut device) = self.devices.get_mut(ip) {
                         let bg_color = if idx % 2 == 0 {
                             egui::Color32::from_rgb(255, 255, 255)
@@ -331,10 +328,19 @@ impl NetworkManagerApp {
 
 impl eframe::App for NetworkManagerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let mut new_devices = false;
         while let Ok(device) = self.device_receiver.try_recv() {
             if let Ok(ip) = device.ip_address.parse() {
+                if !self.devices.contains_key(&ip) {
+                    new_devices = true;
+                }
                 self.devices.insert(ip, device);
             }
+        }
+
+        if new_devices {
+            self.sorted_devices = self.devices.iter().map(|d| *d.key()).collect();
+            self.sorted_devices.sort();
         }
 
         if self.selected_interface.lock().unwrap().is_none() {

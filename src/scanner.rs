@@ -164,6 +164,7 @@ impl NetworkScanner {
             for port in common_ports {
                 Self::send_tcp_syn_packet(&mut **tx, &self.interface, source_ip, ip, port)?;
             }
+            tokio::task::yield_now().await;
         }
 
         Ok(())
