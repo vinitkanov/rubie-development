@@ -27,6 +27,7 @@ pub struct NetworkScanner {
     sender: mpsc::UnboundedSender<NetworkDevice>,
     command_receiver: mpsc::UnboundedReceiver<ScanCommand>,
     warning_sender: mpsc::UnboundedSender<String>,
+    router_mac: MacAddr,
 }
 
 impl NetworkScanner {
@@ -37,12 +38,20 @@ impl NetworkScanner {
         command_receiver: mpsc::UnboundedReceiver<ScanCommand>,
         warning_sender: mpsc::UnboundedSender<String>,
     ) -> Self {
+        let router_mac = default_net::get_default_gateway()
+            .ok()
+            .map(|g| {
+                let bytes = g.mac_addr.octets();
+                MacAddr::new(bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5])
+            })
+            .unwrap_or_else(MacAddr::zero);
         Self {
             interface,
             devices,
             sender,
             command_receiver,
             warning_sender,
+            router_mac,
         }
     }
 
@@ -56,11 +65,16 @@ impl NetworkScanner {
 
         let devices = self.devices.clone();
         let sender = self.sender.clone();
+        let router_mac = self.router_mac;
+        let router_ip = default_net::get_default_gateway()
+            .ok()
+            .map(|g| g.ip_addr)
+            .unwrap_or(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)));
 
         // ARP listener task
         tokio::spawn(async move {
             loop {
-                Self::on_packet_arrival(&mut rx, &devices, &sender).await;
+                Self::on_packet_arrival(&mut rx, &devices, &sender, router_mac, router_ip).await;
             }
         });
 
@@ -292,22 +306,33 @@ impl NetworkScanner {
         rx: &mut Box<dyn datalink::DataLinkReceiver>,
         devices: &Arc<DashMap<String, NetworkDevice>>,
         sender: &mpsc::UnboundedSender<NetworkDevice>,
+        router_mac: MacAddr,
+        router_ip: IpAddr,
     ) {
         match rx.next() {
             Ok(packet) => {
                 if let Some(ethernet_packet) = EthernetPacket::new(packet) {
                     let source_mac = ethernet_packet.get_source();
                     let source_ip = match ethernet_packet.get_ethertype() {
-                        EtherTypes::Ipv4 => Ipv4Packet::new(ethernet_packet.payload())
-                            .map(|p| IpAddr::V4(p.get_source())),
+                        EtherTypes::Ipv4 => {
+                            Ipv4Packet::new(ethernet_packet.payload()).map(|p| IpAddr::V4(p.get_source()))
+                        }
                         EtherTypes::Arp => ArpPacket::new(ethernet_packet.payload())
                             .map(|p| IpAddr::V4(p.get_sender_proto_addr())),
                         _ => None,
                     };
 
                     if let Some(ip) = source_ip {
+                        if source_mac == router_mac && ip != router_ip {
+                            return;
+                        }
                         let mac_address = source_mac.to_string();
                         let ip_address = ip.to_string();
+
+                        println!(
+                            "[Scanner] Received packet from IP: {}, MAC: {}",
+                            ip_address, mac_address
+                        );
 
                         if let Some(mut device) = devices.get_mut(&mac_address) {
                             device.last_arp_time = Some(Instant::now());
