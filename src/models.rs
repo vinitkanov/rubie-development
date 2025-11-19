@@ -19,7 +19,6 @@ pub struct NetworkDevice {
     pub mac_address: String,
     pub vendor: String,
     pub status: DeviceStatus,
-    pub response_time: String,
     #[serde(skip)]
     pub last_arp_time: Option<Instant>,
     #[serde(skip)]

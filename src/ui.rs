@@ -253,12 +253,6 @@ impl NetworkManagerApp {
                     ui.label(egui::RichText::new("Vendor").strong().size(12.0));
                     ui.add_space(80.0);
                     ui.label(egui::RichText::new("Status").strong().size(12.0));
-                    ui.add_space(80.0);
-                    ui.label(
-                        egui::RichText::new("Response Time")
-                            .strong()
-                            .size(12.0),
-                    );
                 });
             });
     }
@@ -311,8 +305,6 @@ impl NetworkManagerApp {
                 }
             };
             ui.colored_label(status_color, status_text);
-            ui.add_space(70.0);
-            ui.label(egui::RichText::new(&device.response_time).size(12.0));
         });
     }
     fn render_warnings(&mut self, ui: &mut egui::Ui) {

@@ -16,7 +16,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::time;
-use ping_async::IcmpEchoRequestor;
 
 pub enum ScanCommand {
     Scan,
@@ -332,22 +331,13 @@ impl NetworkScanner {
                             }
                             device.last_arp_time = Some(Instant::now());
                             device.status = DeviceStatus::Active;
-                            if let Some(response_time) = Self::ping_device(ip).await {
-                                device.response_time = format!("{}ms", response_time);
-                            }
                         } else {
-                            let response_time = if let Some(response_time) = Self::ping_device(ip).await {
-                                format!("{}ms", response_time)
-                            } else {
-                                "N/A".to_string()
-                            };
                             let device = NetworkDevice {
                                 ip_address: ip.to_string(),
                                 mac_address,
                                 hostname: "".to_string(),
                                 vendor: "".to_string(),
                                 status: DeviceStatus::Active,
-                                response_time,
                                 last_arp_time: Some(Instant::now()),
                                 selected: false,
                                 is_killed: false,
@@ -379,15 +369,6 @@ impl NetworkScanner {
                     }
                 }
             }
-        }
-    }
-
-    async fn ping_device(addr: IpAddr) -> Option<u128> {
-        let pinger = IcmpEchoRequestor::new(addr, None, None, None).ok()?;
-        if let Ok(reply) = pinger.send().await {
-            Some(reply.round_trip_time().as_millis())
-        } else {
-            None
         }
     }
 }
