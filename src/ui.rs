@@ -22,6 +22,7 @@ pub struct NetworkManagerApp {
     selected_interface: Arc<Mutex<Option<NetworkInterface>>>,
     device_receiver: mpsc::UnboundedReceiver<NetworkDevice>,
     command_sender: Option<mpsc::UnboundedSender<ScanCommand>>,
+    error: Arc<Mutex<Option<String>>>,
 }
 
 impl NetworkManagerApp {
@@ -44,6 +45,7 @@ impl NetworkManagerApp {
             selected_interface,
             device_receiver,
             command_sender: None,
+            error: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -267,14 +269,26 @@ impl eframe::App for NetworkManagerApp {
                         device_sender,
                         command_receiver,
                     );
+                    let error_clone = self.error.clone();
                     TOKIO_RUNTIME.spawn(async move {
                         if let Err(e) = scanner.start().await {
-                            eprintln!("Failed to start scanner: {}", e);
+                            *error_clone.lock().unwrap() = Some(e.to_string());
                         }
                     });
                 }
             }
         } else {
+            if let Some(error) = self.error.lock().unwrap().as_ref() {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(100.0);
+                        ui.heading("Error");
+                        ui.add_space(20.0);
+                        ui.label(error);
+                    });
+                });
+                return;
+            }
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.add_space(10.0);
                 self.render_header(ui);

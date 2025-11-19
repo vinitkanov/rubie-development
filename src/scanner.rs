@@ -51,13 +51,7 @@ impl NetworkScanner {
         // ARP listener task
         tokio::spawn(async move {
             loop {
-                match Self::on_packet_arrival(&mut rx, &devices, &sender).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        eprintln!("Error receiving packet: {}", e);
-                        break;
-                    }
-                }
+                Self::on_packet_arrival(&mut rx, &devices, &sender).await;
             }
         });
 
@@ -109,7 +103,7 @@ impl NetworkScanner {
             if ip == source_ip {
                 continue;
             }
-            Self::send_arp_request(&mut **tx, &self.interface, source_ip, ip);
+            Self::send_arp_request(&mut **tx, &self.interface, source_ip, ip)?;
         }
 
         Ok(())
@@ -120,7 +114,7 @@ impl NetworkScanner {
         interface: &NetworkInterface,
         source_ip: Ipv4Addr,
         target_ip: Ipv4Addr,
-    ) {
+    ) -> Result<()> {
         let source_mac = interface.mac.unwrap();
 
         let mut ethernet_buffer = [0u8; 42];
@@ -145,14 +139,18 @@ impl NetworkScanner {
 
         ethernet_packet.set_payload(arp_packet.packet());
 
-        tx.send_to(ethernet_packet.packet(), None);
+        if let Some(Err(e)) = tx.send_to(ethernet_packet.packet(), None) {
+            return Err(e.into());
+        }
+
+        Ok(())
     }
 
     async fn on_packet_arrival(
         rx: &mut Box<dyn datalink::DataLinkReceiver>,
         devices: &Arc<DashMap<String, NetworkDevice>>,
         sender: &mpsc::UnboundedSender<NetworkDevice>,
-    ) -> Result<()> {
+    ) {
         match rx.next() {
             Ok(packet) => {
                 if let Some(ethernet_packet) = EthernetPacket::new(packet) {
@@ -177,7 +175,9 @@ impl NetworkScanner {
                                         is_killed: false,
                                     };
                                     devices.insert(mac_address, device.clone());
-                                    sender.send(device)?;
+                                    if let Err(e) = sender.send(device) {
+                                        eprintln!("Failed to send device to UI: {}", e);
+                                    }
                                 }
                             }
                         }
@@ -185,10 +185,9 @@ impl NetworkScanner {
                 }
             }
             Err(e) => {
-                return Err(anyhow::anyhow!("Error receiving packet: {}", e));
+                eprintln!("Error receiving packet: {}", e);
             }
         }
-        Ok(())
     }
 
     async fn start_background_scan(devices: Arc<DashMap<String, NetworkDevice>>) {
