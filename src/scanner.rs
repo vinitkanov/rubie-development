@@ -12,10 +12,15 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::time;
 
+pub enum ScanCommand {
+    Scan,
+}
+
 pub struct NetworkScanner {
     interface: NetworkInterface,
     devices: Arc<DashMap<String, NetworkDevice>>,
     sender: mpsc::UnboundedSender<NetworkDevice>,
+    command_receiver: mpsc::UnboundedReceiver<ScanCommand>,
 }
 
 impl NetworkScanner {
@@ -23,15 +28,17 @@ impl NetworkScanner {
         interface: NetworkInterface,
         devices: Arc<DashMap<String, NetworkDevice>>,
         sender: mpsc::UnboundedSender<NetworkDevice>,
+        command_receiver: mpsc::UnboundedReceiver<ScanCommand>,
     ) -> Self {
         Self {
             interface,
             devices,
             sender,
+            command_receiver,
         }
     }
 
-    pub async fn start(&self) -> Result<()> {
+    pub async fn start(&mut self) -> Result<()> {
         let (mut tx, mut rx) = match datalink::channel(&self.interface, Default::default()) {
             Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
             Ok(_) => return Err(anyhow::anyhow!("Unsupported channel type")),
@@ -63,7 +70,15 @@ impl NetworkScanner {
         // Initial ARP probe
         self.probe_devices(&mut tx).await?;
 
-        Ok(())
+        loop {
+            if let Some(command) = self.command_receiver.recv().await {
+                match command {
+                    ScanCommand::Scan => {
+                        self.probe_devices(&mut tx).await?;
+                    }
+                }
+            }
+        }
     }
 
     async fn probe_devices(&self, tx: &mut Box<dyn datalink::DataLinkSender>) -> Result<()> {
