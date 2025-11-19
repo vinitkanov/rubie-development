@@ -14,8 +14,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
+use std::net::IpAddr;
+
 pub struct NetworkManagerApp {
-    devices: Arc<DashMap<String, NetworkDevice>>,
+    devices: Arc<DashMap<IpAddr, NetworkDevice>>,
     auto_refresh: bool,
     last_scan: Instant,
     interface_selector: InterfaceSelector,
@@ -324,9 +326,9 @@ impl NetworkManagerApp {
 
 impl eframe::App for NetworkManagerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if let Ok(device) = self.device_receiver.try_recv() {
-            if !self.devices.contains_key(&device.mac_address) {
-                self.devices.insert(device.mac_address.clone(), device);
+        while let Ok(device) = self.device_receiver.try_recv() {
+            if let Ok(ip) = device.ip_address.parse() {
+                self.devices.insert(ip, device);
             }
         }
 

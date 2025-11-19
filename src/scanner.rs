@@ -23,7 +23,7 @@ pub enum ScanCommand {
 
 pub struct NetworkScanner {
     interface: NetworkInterface,
-    devices: Arc<DashMap<String, NetworkDevice>>,
+    devices: Arc<DashMap<IpAddr, NetworkDevice>>,
     sender: mpsc::UnboundedSender<NetworkDevice>,
     command_receiver: mpsc::UnboundedReceiver<ScanCommand>,
     warning_sender: mpsc::UnboundedSender<String>,
@@ -33,7 +33,7 @@ pub struct NetworkScanner {
 impl NetworkScanner {
     pub fn new(
         interface: NetworkInterface,
-        devices: Arc<DashMap<String, NetworkDevice>>,
+        devices: Arc<DashMap<IpAddr, NetworkDevice>>,
         sender: mpsc::UnboundedSender<NetworkDevice>,
         command_receiver: mpsc::UnboundedReceiver<ScanCommand>,
         warning_sender: mpsc::UnboundedSender<String>,
@@ -304,10 +304,10 @@ impl NetworkScanner {
 
     async fn on_packet_arrival(
         rx: &mut Box<dyn datalink::DataLinkReceiver>,
-        devices: &Arc<DashMap<String, NetworkDevice>>,
+        devices: &Arc<DashMap<IpAddr, NetworkDevice>>,
         sender: &mpsc::UnboundedSender<NetworkDevice>,
         router_mac: MacAddr,
-        router_ip: IpAddr,
+        _router_ip: IpAddr,
     ) {
         match rx.next() {
             Ok(packet) => {
@@ -323,25 +323,18 @@ impl NetworkScanner {
                     };
 
                     if let Some(ip) = source_ip {
-                        if source_mac == router_mac && ip != router_ip {
-                            return;
-                        }
                         let mac_address = source_mac.to_string();
-                        let ip_address = ip.to_string();
 
-                        println!(
-                            "[Scanner] Received packet from IP: {}, MAC: {}",
-                            ip_address, mac_address
-                        );
-
-                        if let Some(mut device) = devices.get_mut(&mac_address) {
+                        if let Some(mut device) = devices.get_mut(&ip) {
+                            if device.mac_address != mac_address && source_mac != router_mac {
+                                device.mac_address = mac_address;
+                            }
                             device.last_arp_time = Some(Instant::now());
                             device.status = DeviceStatus::Active;
-                            device.ip_address = ip_address;
                         } else {
                             let device = NetworkDevice {
-                                ip_address,
-                                mac_address: mac_address.clone(),
+                                ip_address: ip.to_string(),
+                                mac_address,
                                 hostname: "".to_string(),
                                 vendor: "".to_string(),
                                 status: DeviceStatus::Active,
@@ -349,7 +342,7 @@ impl NetworkScanner {
                                 selected: false,
                                 is_killed: false,
                             };
-                            devices.insert(mac_address, device.clone());
+                            devices.insert(ip, device.clone());
                             if let Err(e) = sender.send(device) {
                                 eprintln!("Failed to send device to UI: {}", e);
                             }
@@ -363,7 +356,7 @@ impl NetworkScanner {
         }
     }
 
-    async fn start_background_scan(devices: Arc<DashMap<String, NetworkDevice>>) {
+    async fn start_background_scan(devices: Arc<DashMap<IpAddr, NetworkDevice>>) {
         let mut is_alive_interval = time::interval(Duration::from_secs(30));
 
         loop {

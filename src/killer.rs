@@ -10,15 +10,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time;
 
+use std::net::IpAddr;
+
 #[derive(Clone)]
 pub struct Killer {
-    devices: Arc<DashMap<String, NetworkDevice>>,
+    devices: Arc<DashMap<IpAddr, NetworkDevice>>,
     interface: Arc<Mutex<Option<NetworkInterface>>>,
 }
 
 impl Killer {
     pub fn new(
-        devices: Arc<DashMap<String, NetworkDevice>>,
+        devices: Arc<DashMap<IpAddr, NetworkDevice>>,
         interface: Arc<Mutex<Option<NetworkInterface>>>,
     ) -> Self {
         Self { devices, interface }
