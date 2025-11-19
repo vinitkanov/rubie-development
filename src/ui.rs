@@ -4,7 +4,7 @@ use crate::{
     killer::Killer,
     models::{DeviceStatus, NetworkDevice},
     restore::restore_selected_devices,
-    scanner::NetworkScanner,
+    scanner::{NetworkScanner, ScanCommand},
     TOKIO_RUNTIME,
 };
 use dashmap::DashMap;
@@ -21,6 +21,7 @@ pub struct NetworkManagerApp {
     interface_selector: InterfaceSelector,
     selected_interface: Arc<Mutex<Option<NetworkInterface>>>,
     device_receiver: mpsc::UnboundedReceiver<NetworkDevice>,
+    command_sender: Option<mpsc::UnboundedSender<ScanCommand>>,
     killer: Killer,
 }
 
@@ -43,6 +44,7 @@ impl NetworkManagerApp {
             interface_selector: InterfaceSelector::new(),
             selected_interface,
             device_receiver,
+            command_sender: None,
             killer,
         }
     }
@@ -113,7 +115,9 @@ impl NetworkManagerApp {
                 )
                 .clicked()
             {
-                // To be implemented
+                if let Some(sender) = &self.command_sender {
+                    let _ = sender.send(ScanCommand::Scan);
+                }
             }
             ui.add_space(5.0);
             if ui
@@ -124,7 +128,9 @@ impl NetworkManagerApp {
                 )
                 .clicked()
             {
-                // To be implemented
+                if let Some(sender) = &self.command_sender {
+                    let _ = sender.send(ScanCommand::Scan);
+                }
             }
             ui.add_space(100.0);
             let selected_count = self.devices.iter().filter(|d| d.selected).count();
@@ -254,9 +260,15 @@ impl eframe::App for NetworkManagerApp {
                 if let Some(interface) = self.interface_selector.get_selected_interface() {
                     *self.selected_interface.lock().unwrap() = Some(interface.clone());
                     let (device_sender, device_receiver) = mpsc::unbounded_channel();
+                    let (command_sender, command_receiver) = mpsc::unbounded_channel();
                     self.device_receiver = device_receiver;
-                    let scanner =
-                        NetworkScanner::new(interface.clone(), self.devices.clone(), device_sender);
+                    self.command_sender = Some(command_sender);
+                    let mut scanner = NetworkScanner::new(
+                        interface.clone(),
+                        self.devices.clone(),
+                        device_sender,
+                        command_receiver,
+                    );
                     TOKIO_RUNTIME.spawn(async move {
                         if let Err(e) = scanner.start().await {
                             eprintln!("Failed to start scanner: {}", e);
