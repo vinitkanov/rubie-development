@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::time;
+use tokio_icmp_echo::Pinger;
 
 pub enum ScanCommand {
     Scan,
@@ -73,8 +74,17 @@ impl NetworkScanner {
 
         // ARP listener task
         tokio::spawn(async move {
+            let pinger = Pinger::new().await.expect("Failed to create pinger");
             loop {
-                Self::on_packet_arrival(&mut rx, &devices, &sender, router_mac, router_ip).await;
+                Self::on_packet_arrival(
+                    &mut rx,
+                    &devices,
+                    &sender,
+                    router_mac,
+                    router_ip,
+                    &pinger,
+                )
+                .await;
             }
         });
 
@@ -308,6 +318,7 @@ impl NetworkScanner {
         sender: &mpsc::UnboundedSender<NetworkDevice>,
         router_mac: MacAddr,
         _router_ip: IpAddr,
+        pinger: &Pinger,
     ) {
         match rx.next() {
             Ok(packet) => {
@@ -331,13 +342,22 @@ impl NetworkScanner {
                             }
                             device.last_arp_time = Some(Instant::now());
                             device.status = DeviceStatus::Active;
+                            if let Some(response_time) = Self::ping_device(pinger, ip).await {
+                                device.response_time = format!("{}ms", response_time);
+                            }
                         } else {
+                            let response_time = if let Some(response_time) = Self::ping_device(pinger, ip).await {
+                                format!("{}ms", response_time)
+                            } else {
+                                "N/A".to_string()
+                            };
                             let device = NetworkDevice {
                                 ip_address: ip.to_string(),
                                 mac_address,
                                 hostname: "".to_string(),
                                 vendor: "".to_string(),
                                 status: DeviceStatus::Active,
+                                response_time,
                                 last_arp_time: Some(Instant::now()),
                                 selected: false,
                                 is_killed: false,
@@ -369,6 +389,17 @@ impl NetworkScanner {
                     }
                 }
             }
+        }
+    }
+
+    async fn ping_device(pinger: &Pinger, addr: IpAddr) -> Option<u128> {
+        let timeout = Duration::from_secs(2);
+        let ident = random::<u16>();
+        let seq_no = 0;
+        if let Ok(Some(duration)) = pinger.ping(addr, ident, seq_no, timeout).await {
+            Some(duration.as_millis())
+        } else {
+            None
         }
     }
 }
