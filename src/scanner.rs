@@ -21,6 +21,7 @@ pub struct NetworkScanner {
     devices: Arc<DashMap<String, NetworkDevice>>,
     sender: mpsc::UnboundedSender<NetworkDevice>,
     command_receiver: mpsc::UnboundedReceiver<ScanCommand>,
+    warning_sender: mpsc::UnboundedSender<String>,
 }
 
 impl NetworkScanner {
@@ -29,16 +30,19 @@ impl NetworkScanner {
         devices: Arc<DashMap<String, NetworkDevice>>,
         sender: mpsc::UnboundedSender<NetworkDevice>,
         command_receiver: mpsc::UnboundedReceiver<ScanCommand>,
+        warning_sender: mpsc::UnboundedSender<String>,
     ) -> Self {
         Self {
             interface,
             devices,
             sender,
             command_receiver,
+            warning_sender,
         }
     }
 
     pub async fn start(&mut self) -> Result<()> {
+        println!("[Scanner] Starting scanner");
         let (mut tx, mut rx) = match datalink::channel(&self.interface, Default::default()) {
             Ok(Channel::Ethernet(tx, rx)) => (tx, rx),
             Ok(_) => return Err(anyhow::anyhow!("Unsupported channel type")),
@@ -64,6 +68,36 @@ impl NetworkScanner {
         // Initial ARP probe
         self.probe_devices(&mut tx).await?;
 
+        // Proxy ARP detection
+        let mut mac_to_ips: std::collections::HashMap<MacAddr, Vec<Ipv4Addr>> = std::collections::HashMap::new();
+        for entry in self.devices.iter() {
+            let device = entry.value();
+            if let Ok(ip) = device.ip_address.parse::<Ipv4Addr>() {
+                if let Ok(mac) = device.mac_address.parse::<MacAddr>() {
+                    mac_to_ips.entry(mac).or_default().push(ip);
+                }
+            }
+        }
+
+        let mut proxy_arp_detected = false;
+        if let Some(interface_mac) = self.interface.mac {
+            for (mac, ips) in mac_to_ips {
+                if ips.len() > 1 && mac == interface_mac {
+                    proxy_arp_detected = true;
+                    break;
+                }
+            }
+        }
+
+
+        if proxy_arp_detected {
+            let _ = self.warning_sender.send(
+                "Proxy ARP detected! Your router is responding for all devices. \
+                For genuine MAC addresses, please disable Proxy ARP on your MikroTik router."
+                    .to_string(),
+            );
+        }
+
         loop {
             if let Some(command) = self.command_receiver.recv().await {
                 match command {
@@ -76,6 +110,7 @@ impl NetworkScanner {
     }
 
     async fn probe_devices(&self, tx: &mut Box<dyn datalink::DataLinkSender>) -> Result<()> {
+        println!("[Scanner] Probing devices");
         let source_ip = self
             .interface
             .ips
@@ -99,6 +134,7 @@ impl NetworkScanner {
             _ => return Err(anyhow::anyhow!("Only IPv4 networks are supported")),
         };
 
+        println!("[Scanner] Iterating through network to send ARP requests");
         for ip in network_iter {
             if ip == source_ip {
                 continue;
@@ -139,11 +175,11 @@ impl NetworkScanner {
 
         ethernet_packet.set_payload(arp_packet.packet());
 
-        if let Some(Err(e)) = tx.send_to(ethernet_packet.packet(), None) {
-            return Err(e.into());
+        match tx.send_to(ethernet_packet.packet(), None) {
+            Some(Ok(_)) => Ok(()),
+            Some(Err(e)) => Err(e.into()),
+            None => Err(anyhow::anyhow!("Failed to send packet: the network interface may not be available")),
         }
-
-        Ok(())
     }
 
     async fn on_packet_arrival(

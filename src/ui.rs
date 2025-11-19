@@ -23,11 +23,14 @@ pub struct NetworkManagerApp {
     device_receiver: mpsc::UnboundedReceiver<NetworkDevice>,
     command_sender: Option<mpsc::UnboundedSender<ScanCommand>>,
     error: Arc<Mutex<Option<String>>>,
+    warning_receiver: mpsc::UnboundedReceiver<String>,
+    proxy_arp_warning: Option<String>,
 }
 
 impl NetworkManagerApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let (_device_sender, device_receiver) = mpsc::unbounded_channel();
+        let (_warning_sender, warning_receiver) = mpsc::unbounded_channel();
         let devices = Arc::new(DashMap::new());
         let selected_interface = Arc::new(Mutex::new(None));
         let killer = Killer::new(devices.clone(), selected_interface.clone());
@@ -46,6 +49,8 @@ impl NetworkManagerApp {
             device_receiver,
             command_sender: None,
             error: Arc::new(Mutex::new(None)),
+            warning_receiver,
+            proxy_arp_warning: None,
         }
     }
 
@@ -115,6 +120,7 @@ impl NetworkManagerApp {
                 )
                 .clicked()
             {
+                println!("[UI] Scan button clicked");
                 if let Some(sender) = &self.command_sender {
                     let _ = sender.send(ScanCommand::Scan);
                 }
@@ -181,7 +187,56 @@ impl NetworkManagerApp {
         ui.add_space(5.0);
         self.render_table_header(ui);
         ui.separator();
-        self.render_table_content(ui);
+
+        if self.proxy_arp_warning.is_some() {
+            // Group devices by MAC address
+            let mut grouped_devices: std::collections::HashMap<String, Vec<NetworkDevice>> = std::collections::HashMap::new();
+            for entry in self.devices.iter() {
+                let device = entry.value();
+                grouped_devices.entry(device.mac_address.clone()).or_default().push(device.clone());
+            }
+
+            egui::ScrollArea::vertical()
+                .max_height(400.0)
+                .show(ui, |ui| {
+                    for (mac, devices) in grouped_devices.iter() {
+                        ui.group(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.add_space(10.0);
+                                ui.label(egui::RichText::new(format!("MAC: {}", mac)).strong());
+                            });
+                            for device in devices {
+                                self.render_device_row_grouped(ui, device);
+                            }
+                        });
+                        ui.add_space(5.0);
+                    }
+                });
+        } else {
+            // Original rendering logic
+            self.render_table_content(ui);
+        }
+    }
+
+// New function for rendering grouped rows
+    fn render_device_row_grouped(&self, ui: &mut egui::Ui, device: &NetworkDevice) {
+        ui.horizontal(|ui| {
+            ui.add_space(30.0); // Indent
+            ui.label(egui::RichText::new(&device.ip_address).size(12.0));
+            ui.add_space(70.0);
+            ui.label(egui::RichText::new(&device.hostname).size(12.0));
+            ui.add_space(50.0);
+            // MAC address is already displayed in the group header
+            ui.add_space(50.0);
+            ui.label(egui::RichText::new(&device.vendor).size(12.0));
+            ui.add_space(70.0);
+            let status_color = match device.status {
+                DeviceStatus::Active => egui::Color32::from_rgb(50, 150, 50),
+                DeviceStatus::Inactive => egui::Color32::from_rgb(100, 100, 100),
+                _ => egui::Color32::from_rgb(150, 150, 150),
+            };
+            ui.colored_label(status_color, device.status.as_str());
+        });
     }
 
     fn render_table_header(&self, ui: &mut egui::Ui) {
@@ -245,6 +300,26 @@ impl NetworkManagerApp {
             ui.colored_label(status_color, device.status.as_str());
         });
     }
+    fn render_warnings(&mut self, ui: &mut egui::Ui) {
+        if let Ok(warning) = self.warning_receiver.try_recv() {
+            self.proxy_arp_warning = Some(warning);
+        }
+
+        if let Some(warning) = &self.proxy_arp_warning {
+            ui.add_space(10.0);
+            egui::Frame::none()
+                .fill(egui::Color32::from_rgb(255, 243, 205))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 229, 180)))
+                .inner_margin(15.0)
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("⚠️");
+                        ui.label(egui::RichText::new(warning).color(egui::Color32::BLACK));
+                    });
+                });
+            ui.add_space(10.0);
+        }
+    }
 }
 
 impl eframe::App for NetworkManagerApp {
@@ -261,13 +336,16 @@ impl eframe::App for NetworkManagerApp {
                     *self.selected_interface.lock().unwrap() = Some(interface.clone());
                     let (device_sender, device_receiver) = mpsc::unbounded_channel();
                     let (command_sender, command_receiver) = mpsc::unbounded_channel();
+                    let (warning_sender, warning_receiver) = mpsc::unbounded_channel();
                     self.device_receiver = device_receiver;
                     self.command_sender = Some(command_sender);
+                    self.warning_receiver = warning_receiver;
                     let mut scanner = NetworkScanner::new(
                         interface.clone(),
                         self.devices.clone(),
                         device_sender,
                         command_receiver,
+                        warning_sender,
                     );
                     let error_clone = self.error.clone();
                     TOKIO_RUNTIME.spawn(async move {
@@ -290,6 +368,7 @@ impl eframe::App for NetworkManagerApp {
                 return;
             }
             egui::CentralPanel::default().show(ctx, |ui| {
+                self.render_warnings(ui);
                 ui.add_space(10.0);
                 self.render_header(ui);
                 ui.add_space(1.0);
