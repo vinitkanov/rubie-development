@@ -18,8 +18,10 @@ use std::net::IpAddr;
 
 pub struct NetworkManagerApp {
     devices: Arc<DashMap<IpAddr, NetworkDevice>>,
+    sorted_devices: Vec<IpAddr>,
     auto_refresh: bool,
     last_scan: Instant,
+    select_all: bool,
     interface_selector: InterfaceSelector,
     selected_interface: Arc<Mutex<Option<NetworkInterface>>>,
     device_receiver: mpsc::UnboundedReceiver<NetworkDevice>,
@@ -27,6 +29,7 @@ pub struct NetworkManagerApp {
     error: Arc<Mutex<Option<String>>>,
     warning_receiver: mpsc::UnboundedReceiver<String>,
     proxy_arp_warning: Option<String>,
+    last_device_count: usize,
 }
 
 impl NetworkManagerApp {
@@ -44,8 +47,10 @@ impl NetworkManagerApp {
 
         Self {
             devices,
+            sorted_devices: Vec::new(),
             auto_refresh: false,
             last_scan: Instant::now(),
+            select_all: false,
             interface_selector: InterfaceSelector::new(),
             selected_interface,
             device_receiver,
@@ -53,6 +58,7 @@ impl NetworkManagerApp {
             error: Arc::new(Mutex::new(None)),
             warning_receiver,
             proxy_arp_warning: None,
+            last_device_count: 0,
         }
     }
 
@@ -140,11 +146,15 @@ impl NetworkManagerApp {
                     let _ = sender.send(ScanCommand::Scan);
                 }
             }
-            ui.add_space(100.0);
+            ui.add_space(20.0);
             let selected_count = self.devices.iter().filter(|d| d.selected).count();
             self.render_disconnect_button(ui, selected_count);
             ui.add_space(5.0);
             self.render_restore_button(ui, selected_count);
+            ui.add_space(5.0);
+            self.render_restore_all_button(ui);
+            ui.add_space(5.0);
+            self.render_disconnect_all_button(ui);
         });
     }
 
@@ -180,6 +190,40 @@ impl NetworkManagerApp {
         }
     }
 
+    fn render_restore_all_button(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .add_sized(
+                [150.0, 35.0],
+                egui::Button::new(
+                    egui::RichText::new("✔ Restore All").color(egui::Color32::WHITE),
+                )
+                .fill(egui::Color32::from_rgb(50, 150, 50)),
+            )
+            .clicked()
+        {
+            for mut device in self.devices.iter_mut() {
+                device.is_killed = false;
+            }
+        }
+    }
+
+    fn render_disconnect_all_button(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .add_sized(
+                [150.0, 35.0],
+                egui::Button::new(
+                    egui::RichText::new("✖ Disconnect All").color(egui::Color32::WHITE),
+                )
+                .fill(egui::Color32::from_rgb(200, 50, 50)),
+            )
+            .clicked()
+        {
+            for mut device in self.devices.iter_mut() {
+                device.is_killed = true;
+            }
+        }
+    }
+
     fn render_device_table(&mut self, ui: &mut egui::Ui) {
         ui.label(
             egui::RichText::new(format!("Network Devices ({})", self.devices.len()))
@@ -192,13 +236,17 @@ impl NetworkManagerApp {
         self.render_table_content(ui);
     }
 
-    fn render_table_header(&self, ui: &mut egui::Ui) {
+    fn render_table_header(&mut self, ui: &mut egui::Ui) {
         egui::Frame::none()
             .fill(egui::Color32::from_rgb(245, 245, 245))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.add_space(10.0);
-                    ui.label(egui::RichText::new("Select").strong().size(12.0));
+                    if ui.checkbox(&mut self.select_all, "Select").changed() {
+                        for mut device in self.devices.iter_mut() {
+                            device.selected = self.select_all;
+                        }
+                    }
                     ui.add_space(40.0);
                     ui.label(egui::RichText::new("IP Address").strong().size(12.0));
                     ui.add_space(90.0);
@@ -217,17 +265,18 @@ impl NetworkManagerApp {
         egui::ScrollArea::vertical()
             .max_height(400.0)
             .show(ui, |ui| {
-                for (idx, mut item) in self.devices.iter_mut().enumerate() {
-                    let device = item.value_mut();
-                    let bg_color = if idx % 2 == 0 {
-                        egui::Color32::from_rgb(255, 255, 255)
-                    } else {
-                        egui::Color32::from_rgb(250, 250, 250)
-                    };
-                    egui::Frame::none().fill(bg_color).show(ui, |ui| {
-                        self.render_device_row(ui, device);
-                    });
-                    ui.add_space(2.0);
+                for (idx, ip) in self.sorted_devices.iter().enumerate() {
+                    if let Some(mut device) = self.devices.get_mut(ip) {
+                        let bg_color = if idx % 2 == 0 {
+                            egui::Color32::from_rgb(255, 255, 255)
+                        } else {
+                            egui::Color32::from_rgb(250, 250, 250)
+                        };
+                        egui::Frame::none().fill(bg_color).show(ui, |ui| {
+                            self.render_device_row(ui, &mut device);
+                        });
+                        ui.add_space(2.0);
+                    }
                 }
             });
     }
@@ -245,12 +294,16 @@ impl NetworkManagerApp {
             ui.add_space(50.0);
             ui.label(egui::RichText::new(&device.vendor).size(12.0));
             ui.add_space(70.0);
-            let status_color = match device.status {
-                DeviceStatus::Active => egui::Color32::from_rgb(50, 150, 50),
-                DeviceStatus::Inactive => egui::Color32::from_rgb(100, 100, 100),
-                _ => egui::Color32::from_rgb(150, 150, 150),
+            let (status_text, status_color) = if device.is_killed {
+                ("Blocked", egui::Color32::from_rgb(200, 50, 50))
+            } else {
+                match device.status {
+                    DeviceStatus::Active => ("Active", egui::Color32::from_rgb(50, 150, 50)),
+                    DeviceStatus::Inactive => ("Inactive", egui::Color32::from_rgb(100, 100, 100)),
+                    _ => ("Unknown", egui::Color32::from_rgb(150, 150, 150)),
+                }
             };
-            ui.colored_label(status_color, device.status.as_str());
+            ui.colored_label(status_color, status_text);
         });
     }
     fn render_warnings(&mut self, ui: &mut egui::Ui) {
@@ -281,6 +334,13 @@ impl eframe::App for NetworkManagerApp {
             if let Ok(ip) = device.ip_address.parse() {
                 self.devices.insert(ip, device);
             }
+        }
+
+        let current_device_count = self.devices.len();
+        if current_device_count != self.last_device_count {
+            self.sorted_devices = self.devices.iter().map(|d| *d.key()).collect();
+            self.sorted_devices.sort();
+            self.last_device_count = current_device_count;
         }
 
         if self.selected_interface.lock().unwrap().is_none() {

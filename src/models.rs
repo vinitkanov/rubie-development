@@ -9,17 +9,6 @@ pub enum DeviceStatus {
     Unknown,
 }
 
-impl DeviceStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            DeviceStatus::Active => "Active",
-            DeviceStatus::Inactive => "Inactive",
-            DeviceStatus::Blocked => "Blocked",
-            DeviceStatus::Unknown => "Unknown",
-        }
-    }
-}
-
 use std::time::Instant;
 
 // Struct to hold information about a network device

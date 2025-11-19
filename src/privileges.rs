@@ -1,9 +1,9 @@
+
 use std::ptr;
 
 #[cfg(windows)]
 pub fn is_admin() -> bool {
     use std::mem;
-    use std::ptr;
     use winapi::um::handleapi::CloseHandle;
     use winapi::um::processthreadsapi::GetCurrentProcess;
     use winapi::um::processthreadsapi::OpenProcessToken;
