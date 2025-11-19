@@ -1,3 +1,5 @@
+use std::ptr;
+
 #[cfg(windows)]
 pub fn is_admin() -> bool {
     use std::mem;
