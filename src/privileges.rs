@@ -1,4 +1,3 @@
-use std::ptr;
 
 #[cfg(windows)]
 pub fn is_admin() -> bool {

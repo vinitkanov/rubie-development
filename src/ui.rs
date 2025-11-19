@@ -29,6 +29,7 @@ pub struct NetworkManagerApp {
     error: Arc<Mutex<Option<String>>>,
     warning_receiver: mpsc::UnboundedReceiver<String>,
     proxy_arp_warning: Option<String>,
+    last_device_count: usize,
 }
 
 impl NetworkManagerApp {
@@ -57,6 +58,7 @@ impl NetworkManagerApp {
             error: Arc::new(Mutex::new(None)),
             warning_receiver,
             proxy_arp_warning: None,
+            last_device_count: 0,
         }
     }
 
@@ -328,19 +330,17 @@ impl NetworkManagerApp {
 
 impl eframe::App for NetworkManagerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let mut new_devices = false;
         while let Ok(device) = self.device_receiver.try_recv() {
             if let Ok(ip) = device.ip_address.parse() {
-                if !self.devices.contains_key(&ip) {
-                    new_devices = true;
-                }
                 self.devices.insert(ip, device);
             }
         }
 
-        if new_devices {
+        let current_device_count = self.devices.len();
+        if current_device_count != self.last_device_count {
             self.sorted_devices = self.devices.iter().map(|d| *d.key()).collect();
             self.sorted_devices.sort();
+            self.last_device_count = current_device_count;
         }
 
         if self.selected_interface.lock().unwrap().is_none() {
