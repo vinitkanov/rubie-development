@@ -105,15 +105,11 @@ impl NetworkScanner {
             _ => return Err(anyhow::anyhow!("Only IPv4 networks are supported")),
         };
 
-        for ip in network_iter.step_by(256) {
-            for i in 1..255 {
-                let target_ip = Ipv4Addr::new(ip.octets()[0], ip.octets()[1], ip.octets()[2], i);
-                if target_ip == source_ip {
-                    continue;
-                }
-
-                Self::send_arp_request(&mut **tx, &self.interface, source_ip, target_ip);
+        for ip in network_iter {
+            if ip == source_ip {
+                continue;
             }
+            Self::send_arp_request(&mut **tx, &self.interface, source_ip, ip);
         }
 
         Ok(())
